@@ -34,7 +34,6 @@ export async function markTodo(taskId: string) {
 
 export async function markTaskAsRead(taskId: string, userId: string) {
   const sb = supabaseBrowser()
-  // Upsert - inserisce o aggiorna se già esiste
   const { error } = await sb
     .from('task_reads')
     .upsert(
@@ -44,19 +43,32 @@ export async function markTaskAsRead(taskId: string, userId: string) {
   if (error) throw error
 }
 
+// ✅ CORRETTO: Query senza JOIN
 export async function getTaskReads(taskId: string) {
   const sb = supabaseBrowser()
-  const { data, error } = await sb
+  
+  // Query 1: Prendi i task_reads
+  const { data: reads, error } = await sb
     .from('task_reads')
-    .select(`
-      seen_at,
-      user:profiles!user_id(full_name)
-    `)
+    .select('user_id, seen_at')
     .eq('task_id', taskId)
     .order('seen_at', { ascending: false })
   
   if (error) throw error
-  return data || []
+  if (!reads || reads.length === 0) return []
+
+  // Query 2: Prendi gli utenti separatamente
+  const userIds = [...new Set(reads.map(r => r.user_id))]
+  const { data: users } = await sb
+    .from('profiles')
+    .select('id, full_name')
+    .in('id', userIds)
+
+  // Combina i dati manualmente
+  return reads.map(read => ({
+    seen_at: read.seen_at,
+    user: users?.find(u => u.id === read.user_id) || { full_name: 'Utente sconosciuto' }
+  }))
 }
 
 export async function isTaskReadByUser(taskId: string, userId: string) {

@@ -46,31 +46,52 @@ export default function TaskDetailPage() {
         role: profile?.role
       });
 
+      // ✅ Query task senza JOIN
       const { data: taskData, error: taskError } = await supabase
         .from('tasks')
-        .select(`
-          id, title, body, status, due_at, done_at, created_at, visible_to_all, created_by,
-          creator:profiles!created_by(full_name)
-        `)
+        .select('id, title, body, status, due_at, done_at, created_at, visible_to_all, created_by')
         .eq('id', taskId)
         .single();
 
       if (taskError) throw taskError;
-      setTask(taskData);
+      
+      // ✅ Prendi il creator separatamente
+      const { data: creator } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', taskData.created_by)
+        .single();
+      
+      setTask({ ...taskData, creator });
 
       await markTaskAsRead(taskId, authUser.id);
 
+      // ✅ Query commenti senza JOIN
       const { data: commentsData, error: commentsError } = await supabase
         .from('task_comments')
-        .select(`
-          id, body, created_at, author_id,
-          author:profiles!author_id(full_name)
-        `)
+        .select('id, body, created_at, author_id')
         .eq('task_id', taskId)
         .order('created_at', { ascending: true });
 
       if (commentsError) throw commentsError;
-      setComments(commentsData || []);
+      
+      // ✅ Prendi gli autori separatamente
+      if (commentsData && commentsData.length > 0) {
+        const authorIds = [...new Set(commentsData.map(c => c.author_id))];
+        const { data: authors } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', authorIds);
+        
+        const commentsWithAuthors = commentsData.map(comment => ({
+          ...comment,
+          author: authors?.find(a => a.id === comment.author_id) || { full_name: 'Utente sconosciuto' }
+        }));
+        
+        setComments(commentsWithAuthors);
+      } else {
+        setComments([]);
+      }
 
       const readsData = await getTaskReads(taskId);
       setTaskReads(readsData);
@@ -107,6 +128,7 @@ export default function TaskDetailPage() {
     const supabase = supabaseBrowser();
 
     try {
+      // ✅ INSERT senza JOIN
       const { data, error } = await supabase
         .from('task_comments')
         .insert({
@@ -114,15 +136,19 @@ export default function TaskDetailPage() {
           author_id: user.id,
           body: newComment.trim()
         })
-        .select(`
-          id, body, created_at, author_id,
-          author:profiles!author_id(full_name)
-        `)
+        .select('id, body, created_at, author_id')
         .single();
 
       if (error) throw error;
 
-      setComments([...comments, data]);
+      // ✅ Prendi l'autore separatamente
+      const { data: author } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', data.author_id)
+        .single();
+
+      setComments([...comments, { ...data, author }]);
       setNewComment('');
     } catch (error) {
       console.error('Errore nell\'aggiungere il commento:', error);
@@ -185,6 +211,7 @@ export default function TaskDetailPage() {
       }
     >
       <div className="max-w-4xl mx-auto space-y-6">
+        {/* Card principale task */}
         <div className={`bg-white rounded-xl shadow-sm border p-6 ${
           isOverdue ? 'border-red-200' : 'border-gray-200'
         }`}>
@@ -232,63 +259,48 @@ export default function TaskDetailPage() {
               </div>
             </div>
 
-            <div className="ml-6">
+            {/* Pulsanti azione */}
+            <div className="ml-6 flex flex-col gap-2">
               {task.status === 'done' ? (
                 <button
                   onClick={() => handleTaskStatusChange('todo')}
                   disabled={taskLoading}
-                  className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
+                  className="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 disabled:opacity-50"
                 >
-                  Riapri
+                  {taskLoading ? 'Aggiornando...' : 'Riapri'}
                 </button>
               ) : (
                 <button
                   onClick={() => handleTaskStatusChange('done')}
                   disabled={taskLoading}
-                  className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
+                  className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
                 >
-                  Completa
+                  {taskLoading ? 'Aggiornando...' : 'Completa'}
                 </button>
               )}
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Visualizzazioni ({taskReads.length})
-          </h2>
-
-          {taskReads.length === 0 ? (
-            <p className="text-gray-500 text-center py-4">
-              Nessuno ha ancora visto questo task.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {taskReads.map((read, index) => (
-                <div key={index} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-b-0">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                      👁️
-                    </div>
-                    <span className="font-medium text-gray-900">
-                      {read.user?.full_name || 'Utente sconosciuto'}
-                    </span>
-                  </div>
-                  <span className="text-sm text-gray-500">
-                    {formatDate(read.seen_at)}
-                  </span>
+        {/* Visualizzazioni */}
+        {taskReads.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Visualizzazioni ({taskReads.length})</h3>
+            <div className="space-y-2">
+              {taskReads.map((read, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-700">{read.user.full_name}</span>
+                  <span className="text-gray-500">{formatDate(read.seen_at)}</span>
                 </div>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Commenti ({comments.length})
-          </h2>
-
+        {/* Sezione commenti */}
+        <div className="bg-white rounded-xl shadow-sm border p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Commenti ({comments.length})</h3>
+          
           <div className="space-y-4 mb-6">
             {comments.length === 0 ? (
               <p className="text-gray-500 text-center py-8">

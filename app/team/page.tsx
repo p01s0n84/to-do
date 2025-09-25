@@ -11,7 +11,7 @@ export default function TeamPage() {
   const [userGroups, setUserGroups] = useState([]);
   const [taskAssignments, setTaskAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('users'); // 'users' | 'groups' | 'assignments'
+  const [activeTab, setActiveTab] = useState('users');
 
   useEffect(() => {
     loadTeamData();
@@ -22,7 +22,6 @@ export default function TeamPage() {
     const supabase = supabaseBrowser();
     
     try {
-      // Carica utente corrente
       const { data: { user: authUser } } = await supabase.auth.getUser();
       if (!authUser) return;
 
@@ -38,7 +37,6 @@ export default function TeamPage() {
         role: profile?.role
       });
 
-      // Carica tutti gli utenti
       const { data: usersData, error: usersError } = await supabase
         .from('profiles')
         .select('id, full_name, role, last_seen_at, created_at')
@@ -47,7 +45,6 @@ export default function TeamPage() {
       if (usersError) throw usersError;
       setUsers(usersData || []);
 
-      // Carica tutti i gruppi
       const { data: groupsData, error: groupsError } = await supabase
         .from('groups')
         .select('id, name')
@@ -56,33 +53,42 @@ export default function TeamPage() {
       if (groupsError) throw groupsError;
       setGroups(groupsData || []);
 
-      // Carica relazioni utenti-gruppi
-      const { data: userGroupsData, error: userGroupsError } = await supabase
+      // ✅ Query senza JOIN
+      const { data: userGroupsRaw, error: userGroupsError } = await supabase
         .from('user_groups')
-        .select(`
-          user_id,
-          group_id,
-          user:profiles!user_id(full_name),
-          group:groups!group_id(name)
-        `);
+        .select('user_id, group_id');
 
       if (userGroupsError) throw userGroupsError;
-      setUserGroups(userGroupsData || []);
 
-      // Carica statistiche assegnazioni task
-      const { data: assignmentsData, error: assignmentsError } = await supabase
+      const userGroupsWithNames = userGroupsRaw?.map(ug => ({
+        ...ug,
+        user: usersData?.find(u => u.id === ug.user_id),
+        group: groupsData?.find(g => g.id === ug.group_id)
+      })) || [];
+      
+      setUserGroups(userGroupsWithNames);
+
+      // ✅ Query senza JOIN
+      const { data: assignmentsRaw, error: assignmentsError } = await supabase
         .from('task_recipients')
-        .select(`
-          task_id,
-          user_id,
-          group_id,
-          task:tasks!task_id(title, status),
-          user:profiles!user_id(full_name),
-          group:groups!group_id(name)
-        `);
+        .select('task_id, user_id, group_id');
 
       if (assignmentsError) throw assignmentsError;
-      setTaskAssignments(assignmentsData || []);
+
+      const taskIds = [...new Set(assignmentsRaw?.map(a => a.task_id) || [])];
+      const { data: tasksData } = await supabase
+        .from('tasks')
+        .select('id, title, status')
+        .in('id', taskIds);
+
+      const assignmentsWithNames = assignmentsRaw?.map(a => ({
+        ...a,
+        task: tasksData?.find(t => t.id === a.task_id),
+        user: usersData?.find(u => u.id === a.user_id),
+        group: groupsData?.find(g => g.id === a.group_id)
+      })) || [];
+
+      setTaskAssignments(assignmentsWithNames);
 
     } catch (error) {
       console.error('Errore nel caricare i dati del team:', error);
@@ -91,7 +97,6 @@ export default function TeamPage() {
     }
   }
 
-  // Calcola statistiche
   const totalUsers = users.length;
   const totalGroups = groups.length;
   const activeUsers = users.filter(u => {
@@ -103,7 +108,6 @@ export default function TeamPage() {
   
   const totalAssignments = taskAssignments.length;
 
-  // Raggruppa utenti per gruppo
   const getUserGroups = (userId) => {
     return userGroups
       .filter(ug => ug.user_id === userId)
@@ -111,7 +115,6 @@ export default function TeamPage() {
       .filter(Boolean);
   };
 
-  // Raggruppa utenti per gruppo (per tab gruppi)
   const getGroupMembers = (groupId) => {
     return userGroups
       .filter(ug => ug.group_id === groupId)
@@ -119,12 +122,10 @@ export default function TeamPage() {
       .filter(Boolean);
   };
 
-  // Conta task assegnati per utente
   const getUserTaskCount = (userId) => {
     return taskAssignments.filter(ta => ta.user_id === userId).length;
   };
 
-  // Conta task assegnati per gruppo
   const getGroupTaskCount = (groupId) => {
     return taskAssignments.filter(ta => ta.group_id === groupId).length;
   };
@@ -160,33 +161,13 @@ export default function TeamPage() {
       title="Team"
       subtitle="Gestisci utenti, gruppi e assegnazioni"
     >
-      {/* Statistiche */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-        <StatsCard
-          title="Utenti totali"
-          value={totalUsers}
-          color="blue"
-        />
-        <StatsCard
-          title="Utenti attivi oggi"
-          value={activeUsers}
-          subtitle="Ultimi accessi"
-          color="green"
-        />
-        <StatsCard
-          title="Gruppi"
-          value={totalGroups}
-          color="orange"
-        />
-        <StatsCard
-          title="Task assegnati"
-          value={totalAssignments}
-          subtitle="Totali"
-          color="gray"
-        />
+        <StatsCard title="Utenti totali" value={totalUsers} color="blue" />
+        <StatsCard title="Utenti attivi oggi" value={activeUsers} subtitle="Ultimi accessi" color="green" />
+        <StatsCard title="Gruppi" value={totalGroups} color="orange" />
+        <StatsCard title="Task assegnati" value={totalAssignments} subtitle="Totali" color="gray" />
       </div>
 
-      {/* Tabs */}
       <div className="bg-white rounded-xl shadow-sm mb-6">
         <div className="border-b border-gray-200">
           <nav className="flex space-x-8 px-6">
